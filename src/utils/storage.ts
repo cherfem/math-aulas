@@ -205,3 +205,30 @@ export async function getAvailableSlotsForDate(date: string): Promise<string[]> 
   const bookedTimes = ((booked.data || []) as any[]).map((r: any) => r.time);
   return allSlots.filter((s: string) => !bookedTimes.includes(s));
 }
+
+export async function getAvailableSlotsByWeekday(date: string): Promise<string[]> {
+  const weekdays = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
+  const dayIndex = new Date(date + 'T12:00:00').getDay();
+  const dayKey = weekdays[dayIndex];
+
+  const [cfg, booked] = await Promise.all([
+    getSiteConfig(),
+    supabase.from('appointments').select('time').eq('date', date).neq('status', 'cancelled'),
+  ]);
+
+  const key = `slots_${dayKey}`;
+  const defaultSlots: Record<string, string> = {
+    monday: '13:00,14:00,15:00,16:00,17:00,18:00,19:00',
+    tuesday: '13:00,14:00,15:00,16:00,17:00,18:00,19:00',
+    wednesday: '13:00,14:00,15:00,16:00,17:00,18:00,19:00',
+    thursday: '13:00,14:00,15:00,16:00,17:00,18:00,19:00',
+    friday: '13:00,14:00,15:00,16:00,17:00,18:00,19:00',
+    saturday: '08:00,09:00,10:00,11:00',
+    sunday: '',
+  };
+
+  const slotStr = cfg[key] !== undefined ? cfg[key] : (defaultSlots[dayKey] || '');
+  const allSlots = slotStr ? slotStr.split(',').filter(Boolean) : [];
+  const bookedTimes = ((booked.data || []) as any[]).map((r: any) => r.time);
+  return allSlots.filter((s: string) => !bookedTimes.includes(s));
+}

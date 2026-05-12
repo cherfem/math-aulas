@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Navigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { getAppointments, getAllUsers, updateAppointmentStatus, deleteAppointment, getSiteConfig, updateSiteConfig } from '../utils/storage';
+import { getAppointments, getAllUsers, updateAppointmentStatus, deleteAppointment, getSiteConfig, updateMultipleConfigs } from '../utils/storage';
 import { Appointment, User } from '../types';
 import { format, parseISO } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
@@ -9,6 +9,26 @@ import { ptBR } from 'date-fns/locale';
 type Tab = 'appointments' | 'users' | 'slots';
 
 const ALL_SLOTS = ['07:00','08:00','09:00','10:00','11:00','12:00','13:00','14:00','15:00','16:00','17:00','18:00','19:00','20:00','21:00'];
+
+const WEEKDAYS = [
+  { key: 'monday',    label: 'Segunda-feira',  short: 'Seg' },
+  { key: 'tuesday',   label: 'Terça-feira',    short: 'Ter' },
+  { key: 'wednesday', label: 'Quarta-feira',   short: 'Qua' },
+  { key: 'thursday',  label: 'Quinta-feira',   short: 'Qui' },
+  { key: 'friday',    label: 'Sexta-feira',    short: 'Sex' },
+  { key: 'saturday',  label: 'Sábado',         short: 'Sáb' },
+  { key: 'sunday',    label: 'Domingo',        short: 'Dom' },
+];
+
+const DEFAULT_SLOTS: Record<string, string> = {
+  monday:    '13:00,14:00,15:00,16:00,17:00,18:00,19:00',
+  tuesday:   '13:00,14:00,15:00,16:00,17:00,18:00,19:00',
+  wednesday: '13:00,14:00,15:00,16:00,17:00,18:00,19:00',
+  thursday:  '13:00,14:00,15:00,16:00,17:00,18:00,19:00',
+  friday:    '13:00,14:00,15:00,16:00,17:00,18:00,19:00',
+  saturday:  '08:00,09:00,10:00,11:00',
+  sunday:    '',
+};
 
 export default function Admin() {
   const { user } = useAuth();
@@ -20,7 +40,8 @@ export default function Admin() {
   const [filterStatus, setFilterStatus] = useState('all');
   const [search, setSearch] = useState('');
   const [pageLoading, setPageLoading] = useState(true);
-  const [activeSlots, setActiveSlots] = useState<string[]>([]);
+  const [selectedDay, setSelectedDay] = useState('monday');
+  const [slotsByDay, setSlotsByDay] = useState<Record<string, string[]>>({});
   const [slotsSaving, setSlotsSaving] = useState(false);
   const [slotsSaved, setSlotsSaved] = useState(false);
 
@@ -29,20 +50,36 @@ export default function Admin() {
     const [appts, usrs, cfg] = await Promise.all([getAppointments(), getAllUsers(), getSiteConfig()]);
     setAppointments(appts);
     setUsers(usrs);
-    const saved = cfg['available_slots'] || '08:00,09:00,10:00,11:00,13:00,14:00,15:00,16:00,17:00,18:00,19:00';
-    setActiveSlots(saved.split(',').filter(Boolean));
+
+    const loaded: Record<string, string[]> = {};
+    WEEKDAYS.forEach(d => {
+      const key = `slots_${d.key}`;
+      const val = cfg[key] !== undefined ? cfg[key] : DEFAULT_SLOTS[d.key];
+      loaded[d.key] = val ? val.split(',').filter(Boolean) : [];
+    });
+    setSlotsByDay(loaded);
     setPageLoading(false);
   };
 
   useEffect(() => { loadData(); }, []);
 
-  const toggleSlot = (slot: string) => {
-    setActiveSlots(prev => prev.includes(slot) ? prev.filter(s => s !== slot) : [...prev, slot].sort());
+  const toggleSlot = (day: string, slot: string) => {
+    setSlotsByDay(prev => {
+      const current = prev[day] || [];
+      const updated = current.includes(slot)
+        ? current.filter(s => s !== slot)
+        : [...current, slot].sort();
+      return { ...prev, [day]: updated };
+    });
   };
 
   const saveSlots = async () => {
     setSlotsSaving(true);
-    await updateSiteConfig('available_slots', activeSlots.join(','));
+    const updates: Record<string, string> = {};
+    WEEKDAYS.forEach(d => {
+      updates[`slots_${d.key}`] = (slotsByDay[d.key] || []).join(',');
+    });
+    await updateMultipleConfigs(updates);
     setSlotsSaving(false);
     setSlotsSaved(true);
     setTimeout(() => setSlotsSaved(false), 2500);
@@ -189,19 +226,54 @@ export default function Admin() {
           </div>
         )}
 
-        {/* ── HORÁRIOS ── */}
+        {/* ── HORÁRIOS POR DIA ── */}
         {tab === 'slots' && (
           <div className="animate-fade">
-            <div className="card" style={{ padding: '1.75rem', maxWidth: 560 }}>
-              <h3 style={{ fontSize: '1.1rem', marginBottom: '0.5rem' }}>🕐 Horários disponíveis para agendamento</h3>
+            <div className="card" style={{ padding: '1.75rem' }}>
+              <h3 style={{ fontSize: '1.1rem', marginBottom: '0.4rem' }}>🕐 Horários por dia da semana</h3>
               <p style={{ color: 'var(--text-secondary)', fontSize: '0.88rem', marginBottom: '1.5rem' }}>
-                Selecione os horários que você tem disponíveis. Apenas os horários marcados aparecerão para os alunos ao agendar.
+                Selecione os horários disponíveis para cada dia. Apenas os marcados aparecerão para os alunos.
               </p>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.6rem', marginBottom: '1.5rem' }}>
-                {ALL_SLOTS.map(slot => {
-                  const active = activeSlots.includes(slot);
+
+              {/* Day selector */}
+              <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.5rem', flexWrap: 'wrap' }}>
+                {WEEKDAYS.map(d => {
+                  const count = (slotsByDay[d.key] || []).length;
+                  const isSelected = selectedDay === d.key;
                   return (
-                    <button key={slot} onClick={() => toggleSlot(slot)} style={{
+                    <button key={d.key} onClick={() => setSelectedDay(d.key)} style={{
+                      padding: '0.5rem 0.9rem', borderRadius: 'var(--radius-md)',
+                      border: `2px solid ${isSelected ? 'var(--cyan)' : 'var(--border)'}`,
+                      background: isSelected ? 'var(--cyan-dim)' : 'var(--bg-input)',
+                      color: isSelected ? 'var(--cyan-light)' : 'var(--text-secondary)',
+                      cursor: 'pointer', fontSize: '0.85rem', fontWeight: isSelected ? 600 : 400,
+                      transition: 'var(--transition)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
+                    }}>
+                      <span>{d.short}</span>
+                      <span style={{ fontSize: '0.7rem', color: count > 0 ? 'var(--success)' : 'var(--text-dim)' }}>
+                        {count > 0 ? `${count} horários` : 'Indisponível'}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Selected day label */}
+              <div style={{ marginBottom: '1rem', fontSize: '0.95rem', fontWeight: 600, color: 'var(--cyan-light)' }}>
+                {WEEKDAYS.find(d => d.key === selectedDay)?.label}
+                {(slotsByDay[selectedDay] || []).length === 0 && (
+                  <span style={{ marginLeft: '0.75rem', fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 400 }}>
+                    — Nenhum horário selecionado (dia indisponível)
+                  </span>
+                )}
+              </div>
+
+              {/* Slots grid */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '0.6rem', marginBottom: '1.5rem' }}>
+                {ALL_SLOTS.map(slot => {
+                  const active = (slotsByDay[selectedDay] || []).includes(slot);
+                  return (
+                    <button key={slot} onClick={() => toggleSlot(selectedDay, slot)} style={{
                       padding: '0.65rem 0.5rem', borderRadius: 'var(--radius-md)',
                       border: `2px solid ${active ? 'var(--cyan)' : 'var(--border)'}`,
                       background: active ? 'var(--cyan-dim)' : 'var(--bg-input)',
@@ -214,14 +286,26 @@ export default function Admin() {
                   );
                 })}
               </div>
+
+              {/* Summary */}
+              <div style={{ background: 'var(--bg-input)', borderRadius: 'var(--radius-md)', padding: '1rem', marginBottom: '1.25rem', fontSize: '0.85rem' }}>
+                <div style={{ fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>Resumo da semana:</div>
+                {WEEKDAYS.map(d => (
+                  <div key={d.key} style={{ display: 'flex', gap: '0.75rem', marginBottom: '0.25rem', alignItems: 'center' }}>
+                    <span style={{ width: 32, color: 'var(--text-muted)', fontSize: '0.8rem' }}>{d.short}</span>
+                    {(slotsByDay[d.key] || []).length > 0
+                      ? <span style={{ color: 'var(--text-secondary)' }}>{(slotsByDay[d.key] || []).join(', ')}</span>
+                      : <span style={{ color: 'var(--text-dim)', fontStyle: 'italic' }}>Indisponível</span>
+                    }
+                  </div>
+                ))}
+              </div>
+
               <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
                 <button onClick={saveSlots} disabled={slotsSaving} className="btn-primary" style={{ padding: '0.75rem 1.75rem' }}>
-                  {slotsSaving ? <><span className="spinner" style={{ marginRight: 8 }} />Salvando...</> : 'Salvar horários'}
+                  {slotsSaving ? <><span className="spinner" style={{ marginRight: 8 }} />Salvando...</> : 'Salvar todos os horários'}
                 </button>
                 {slotsSaved && <span style={{ color: 'var(--success)', fontSize: '0.88rem', fontWeight: 600 }}>✓ Horários salvos!</span>}
-              </div>
-              <div style={{ marginTop: '1rem', fontSize: '0.82rem', color: 'var(--text-muted)' }}>
-                {activeSlots.length} horário(s) selecionado(s): {activeSlots.join(', ') || 'nenhum'}
               </div>
             </div>
           </div>

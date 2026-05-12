@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Navigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { createAppointment, getAvailableSlotsForDate, getAppointmentsByUser } from '../utils/storage';
+import { createAppointment, getAvailableSlotsByWeekday, getAppointmentsByUser } from '../utils/storage';
 import { Appointment } from '../types';
 import { format, addDays, startOfDay, isBefore, isToday, parseISO } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
@@ -34,7 +34,7 @@ export default function Schedule() {
     if (selectedDate) {
       setLoadingSlots(true);
       const dateStr = format(selectedDate, 'yyyy-MM-dd');
-      getAvailableSlotsForDate(dateStr).then(slots => {
+      getAvailableSlotsByWeekday(dateStr).then(slots => {
         setAvailableSlots(slots);
         setSelectedTime('');
         setLoadingSlots(false);
