@@ -14,6 +14,7 @@ export default function Messages() {
   const [conversations, setConversations] = useState<User[]>([]);
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [unreadByUser, setUnreadByUser] = useState<Record<string, number>>({});
   const [text, setText] = useState('');
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
@@ -26,6 +27,15 @@ export default function Messages() {
       if (isAdmin) {
         const users = await getAllUsers();
         setConversations(users);
+        // Count unread per user
+        const allMsgs = await getMessages(user.id);
+        const counts: Record<string, number> = {};
+        users.forEach(u => {
+          counts[u.id] = allMsgs.filter(
+            m => m.fromUserId === u.id && m.toUserId === user.id && !m.read
+          ).length;
+        });
+        setUnreadByUser(counts);
       } else {
         const admin = await getAdminUser();
         if (admin) {
@@ -38,6 +48,19 @@ export default function Messages() {
     load();
   }, [isAdmin]);
 
+  // Refresh unread counts periodically for admin
+  const refreshUnread = async () => {
+    if (!isAdmin) return;
+    const allMsgs = await getMessages(user.id);
+    const counts: Record<string, number> = {};
+    conversations.forEach(u => {
+      counts[u.id] = allMsgs.filter(
+        m => m.fromUserId === u.id && m.toUserId === user.id && !m.read
+      ).length;
+    });
+    setUnreadByUser(counts);
+  };
+
   // Load messages for selected conversation
   const loadMessages = async () => {
     if (!selectedUser) return;
@@ -48,13 +71,17 @@ export default function Messages() {
     );
     setMessages(filtered);
     await markMessagesRead(selectedUser.id, user.id);
+    // Clear unread for this user
+    setUnreadByUser(prev => ({ ...prev, [selectedUser.id]: 0 }));
   };
 
   useEffect(() => {
     if (!selectedUser) return;
     loadMessages();
-    // Poll every 5 seconds for new messages
-    pollRef.current = setInterval(loadMessages, 5000);
+    pollRef.current = setInterval(() => {
+      loadMessages();
+      refreshUnread();
+    }, 5000);
     return () => clearInterval(pollRef.current);
   }, [selectedUser]);
 
@@ -78,6 +105,11 @@ export default function Messages() {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(e as any); }
   };
 
+  const handleSelectUser = (u: User) => {
+    setSelectedUser(u);
+    setUnreadByUser(prev => ({ ...prev, [u.id]: 0 }));
+  };
+
   if (loading) return (
     <div style={{ minHeight: '100vh', paddingTop: '64px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
       <div className="spinner" style={{ width: 36, height: 36, borderWidth: 3 }} />
@@ -95,29 +127,75 @@ export default function Messages() {
           {/* Sidebar — admin only */}
           {isAdmin && (
             <div className="card" style={{ overflow: 'auto', padding: '0.75rem' }}>
-              <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', padding: '0.5rem', marginBottom: '0.25rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Conversas</div>
+              <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', padding: '0.5rem', marginBottom: '0.25rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Conversas
+              </div>
               {conversations.length === 0 && (
-                <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem', textAlign: 'center', padding: '2rem 1rem' }}>Nenhum usuário cadastrado ainda.</div>
-              )}
-              {conversations.map(u => (
-                <div key={u.id} onClick={() => setSelectedUser(u)} style={{
-                  display: 'flex', alignItems: 'center', gap: '0.75rem',
-                  padding: '0.75rem', borderRadius: 'var(--radius-md)', cursor: 'pointer',
-                  background: selectedUser?.id === u.id ? 'var(--cyan-dim)' : 'transparent',
-                  border: `1px solid ${selectedUser?.id === u.id ? 'var(--border-strong)' : 'transparent'}`,
-                  transition: 'var(--transition)', marginBottom: '0.25rem',
-                }}
-                onMouseEnter={e => { if (selectedUser?.id !== u.id) e.currentTarget.style.background = 'var(--bg-card-hover)'; }}
-                onMouseLeave={e => { if (selectedUser?.id !== u.id) e.currentTarget.style.background = 'transparent'; }}>
-                  <div style={{ width: 36, height: 36, borderRadius: '50%', background: 'linear-gradient(135deg, var(--cyan), #0077b6)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.9rem', fontWeight: 700, color: '#fff', flexShrink: 0 }}>
-                    {u.name.charAt(0).toUpperCase()}
-                  </div>
-                  <div style={{ overflow: 'hidden' }}>
-                    <div style={{ fontSize: '0.88rem', fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{u.name}</div>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{u.role === 'parent' ? '👨‍👩‍👦 Responsável' : '🎓 Aluno'}</div>
-                  </div>
+                <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem', textAlign: 'center', padding: '2rem 1rem' }}>
+                  Nenhum usuário cadastrado ainda.
                 </div>
-              ))}
+              )}
+              {conversations.map(u => {
+                const unread = unreadByUser[u.id] || 0;
+                const isSelected = selectedUser?.id === u.id;
+                return (
+                  <div key={u.id} onClick={() => handleSelectUser(u)} style={{
+                    display: 'flex', alignItems: 'center', gap: '0.75rem',
+                    padding: '0.75rem', borderRadius: 'var(--radius-md)', cursor: 'pointer',
+                    background: isSelected ? 'var(--cyan-dim)' : unread > 0 ? 'rgba(0,180,216,0.05)' : 'transparent',
+                    border: `1px solid ${isSelected ? 'var(--border-strong)' : unread > 0 ? 'rgba(0,180,216,0.2)' : 'transparent'}`,
+                    transition: 'var(--transition)', marginBottom: '0.25rem',
+                    position: 'relative',
+                  }}
+                  onMouseEnter={e => { if (!isSelected) e.currentTarget.style.background = 'var(--bg-card-hover)'; }}
+                  onMouseLeave={e => { if (!isSelected) e.currentTarget.style.background = unread > 0 ? 'rgba(0,180,216,0.05)' : 'transparent'; }}>
+                    {/* Avatar */}
+                    <div style={{ position: 'relative', flexShrink: 0 }}>
+                      <div style={{ width: 38, height: 38, borderRadius: '50%', background: 'linear-gradient(135deg, var(--cyan), #0077b6)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.95rem', fontWeight: 700, color: '#fff' }}>
+                        {u.name.charAt(0).toUpperCase()}
+                      </div>
+                      {/* Unread dot */}
+                      {unread > 0 && (
+                        <div style={{
+                          position: 'absolute', top: -3, right: -3,
+                          background: 'var(--cyan)', color: '#fff',
+                          borderRadius: '100px', fontSize: '0.65rem',
+                          fontWeight: 700, minWidth: 18, height: 18,
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          padding: '0 4px', border: '2px solid var(--bg-surface)',
+                          animation: 'pulse-glow 2s ease infinite',
+                        }}>
+                          {unread}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Name + role */}
+                    <div style={{ overflow: 'hidden', flex: 1 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                        <span style={{ fontSize: '0.88rem', fontWeight: unread > 0 ? 700 : 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: unread > 0 ? 'var(--text-primary)' : 'var(--text-secondary)' }}>
+                          {u.name}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                        {u.role === 'parent' ? '👨‍👩‍👦 Responsável' : '🎓 Aluno'}
+                      </div>
+                    </div>
+
+                    {/* Nova mensagem badge */}
+                    {unread > 0 && (
+                      <div style={{
+                        background: 'var(--cyan)', color: '#fff',
+                        borderRadius: 'var(--radius-sm)', fontSize: '0.7rem',
+                        padding: '0.15rem 0.5rem', fontWeight: 600, flexShrink: 0,
+                        whiteSpace: 'nowrap',
+                      }}>
+                        {unread} nova{unread > 1 ? 's' : ''}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
 
