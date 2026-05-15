@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Navigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { createAppointment, getAvailableSlotsByWeekday, getAppointmentsByUser } from '../utils/storage';
+import { createAppointment, getAvailableSlotsWithBlocked, getAppointmentsByUser } from '../utils/storage';
+import { sendBookingEmail } from '../utils/emailService';
 import { Appointment } from '../types';
 import { format, addDays, startOfDay, isBefore, isToday, parseISO } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
@@ -34,7 +35,7 @@ export default function Schedule() {
     if (selectedDate) {
       setLoadingSlots(true);
       const dateStr = format(selectedDate, 'yyyy-MM-dd');
-      getAvailableSlotsByWeekday(dateStr).then(slots => {
+      getAvailableSlotsWithBlocked(dateStr).then(slots => {
         setAvailableSlots(slots);
         setSelectedTime('');
         setLoadingSlots(false);
@@ -53,12 +54,18 @@ export default function Schedule() {
     try {
       const dateStr = format(selectedDate, 'yyyy-MM-dd');
       await createAppointment(user, dateStr, selectedTime, address, notes);
+      // Send booking confirmation email
+      try {
+        const formattedDate = format(selectedDate, "dd/MM/yyyy", { locale: ptBR });
+        const studentName = user.role === 'parent' ? (user.childName || user.name) : user.name;
+        await sendBookingEmail(user.email, studentName, formattedDate, selectedTime, address);
+      } catch {}
       setSuccess(true);
       setSelectedDate(null);
       setSelectedTime('');
       setAddress('');
       setNotes('');
-      setTimeout(() => setSuccess(false), 4000);
+      setTimeout(() => setSuccess(false), 5000);
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -138,7 +145,9 @@ export default function Schedule() {
                 {loadingSlots ? (
                   <div style={{ textAlign: 'center', padding: '1rem' }}><div className="spinner" /></div>
                 ) : availableSlots.length === 0 ? (
-                  <div style={{ color: 'var(--text-muted)', fontSize: '0.9rem', textAlign: 'center', padding: '1rem' }}>Nenhum horário disponível nesta data.</div>
+                  <div style={{ color: 'var(--text-muted)', fontSize: '0.9rem', textAlign: 'center', padding: '1rem' }}>
+                    Nenhum horário disponível nesta data.
+                  </div>
                 ) : (
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: '0.5rem' }}>
                     {availableSlots.map(slot => (
@@ -177,11 +186,12 @@ export default function Schedule() {
                     <div style={{ fontWeight: 600, color: 'var(--cyan-light)', marginBottom: '0.4rem' }}>Resumo:</div>
                     <div style={{ color: 'var(--text-secondary)' }}>📅 {formatDatePtBR(selectedDate)} às {selectedTime}</div>
                     <div style={{ color: 'var(--text-secondary)' }}>👤 {user.role === 'parent' ? user.childName : user.name}</div>
+                    <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginTop: '0.3rem' }}>📧 Você receberá um e-mail de confirmação</div>
                   </div>
                 )}
 
                 {error && <div style={{ background: 'var(--danger-dim)', border: '1px solid rgba(248,113,113,0.2)', borderRadius: 'var(--radius-md)', padding: '0.75rem 1rem', color: 'var(--danger)', fontSize: '0.88rem', marginBottom: '1rem' }}>⚠ {error}</div>}
-                {success && <div style={{ background: 'rgba(45,212,191,0.1)', border: '1px solid rgba(45,212,191,0.3)', borderRadius: 'var(--radius-md)', padding: '0.75rem 1rem', color: 'var(--success)', fontSize: '0.88rem', marginBottom: '1rem' }}>✓ Agendamento realizado! Aguardando confirmação da professora.</div>}
+                {success && <div style={{ background: 'rgba(45,212,191,0.1)', border: '1px solid rgba(45,212,191,0.3)', borderRadius: 'var(--radius-md)', padding: '0.75rem 1rem', color: 'var(--success)', fontSize: '0.88rem', marginBottom: '1rem' }}>✓ Agendamento realizado! Verifique seu e-mail.</div>}
 
                 <button type="submit" className="btn-primary" style={{ width: '100%', padding: '0.85rem', fontSize: '1rem' }} disabled={loading || !selectedDate || !selectedTime}>
                   {loading ? <><span className="spinner" style={{ marginRight: 8 }} />Agendando...</> : 'Confirmar agendamento →'}

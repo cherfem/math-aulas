@@ -232,3 +232,61 @@ export async function getAvailableSlotsByWeekday(date: string): Promise<string[]
   const bookedTimes = ((booked.data || []) as any[]).map((r: any) => r.time);
   return allSlots.filter((s: string) => !bookedTimes.includes(s));
 }
+
+// ─── BLOCKED DATES ────────────────────────────────────────
+
+export async function getBlockedDates(): Promise<any[]> {
+  const { data, error } = await supabase
+    .from('blocked_dates')
+    .select('*')
+    .order('date', { ascending: true });
+  if (error || !data) return [];
+  return data.map((d: any) => ({ id: d.id, date: d.date, reason: d.reason || '', createdAt: d.created_at }));
+}
+
+export async function addBlockedDate(date: string, reason: string) {
+  const { error } = await supabase.from('blocked_dates').insert({ date, reason: reason || null });
+  if (error) throw new Error(error.message);
+}
+
+export async function removeBlockedDate(id: string) {
+  const { error } = await supabase.from('blocked_dates').delete().eq('id', id);
+  if (error) throw new Error(error.message);
+}
+
+export async function isDateBlocked(date: string): Promise<boolean> {
+  const { data } = await supabase.from('blocked_dates').select('id').eq('date', date).single();
+  return !!data;
+}
+
+// ─── PAYMENTS ─────────────────────────────────────────────
+
+export async function togglePayment(id: string, paid: boolean) {
+  const { error } = await supabase.from('appointments').update({ paid }).eq('id', id);
+  if (error) throw new Error(error.message);
+}
+
+export async function cancelAppointmentByStudent(id: string, userId: string): Promise<void> {
+  // Check 48h rule
+  const { data } = await supabase.from('appointments').select('date, time, user_id').eq('id', id).single();
+  if (!data) throw new Error('Agendamento não encontrado.');
+  if (data.user_id !== userId) throw new Error('Sem permissão para cancelar este agendamento.');
+
+  const apptDate = new Date(`${data.date}T${data.time}:00`);
+  const now = new Date();
+  const diffHours = (apptDate.getTime() - now.getTime()) / (1000 * 60 * 60);
+  if (diffHours < 48) throw new Error('Cancelamento não permitido com menos de 48 horas de antecedência.');
+
+  const { error } = await supabase.from('appointments').update({
+    status: 'cancelled',
+    cancelled_by: 'student',
+    cancelled_at: new Date().toISOString(),
+  }).eq('id', id);
+  if (error) throw new Error(error.message);
+}
+
+export async function getAvailableSlotsWithBlocked(date: string): Promise<string[]> {
+  const blocked = await isDateBlocked(date);
+  if (blocked) return [];
+  return getAvailableSlotsByWeekday(date);
+}

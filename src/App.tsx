@@ -9,6 +9,7 @@ import Schedule from './pages/Schedule';
 import Admin from './pages/Admin';
 import MyAccount from './pages/MyAccount';
 import Messages from './pages/Messages';
+import Dashboard from './pages/Dashboard';
 
 export default function App() {
   return (
@@ -21,6 +22,7 @@ export default function App() {
           <Route path="/cadastro" element={<Register />} />
           <Route path="/agendar" element={<Schedule />} />
           <Route path="/admin" element={<Admin />} />
+          <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/minha-conta" element={<MyAccount />} />
           <Route path="/mensagens" element={<Messages />} />
         </Routes>

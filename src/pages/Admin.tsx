@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Navigate } from 'react-router-dom';
+import { Navigate, Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { getAppointments, getAllUsers, updateAppointmentStatus, deleteAppointment, getSiteConfig, updateMultipleConfigs } from '../utils/storage';
+import { sendConfirmationEmail, sendCancellationEmail } from '../utils/emailService';
 import { Appointment, User } from '../types';
 import { format, parseISO } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
@@ -9,25 +10,23 @@ import { ptBR } from 'date-fns/locale';
 type Tab = 'appointments' | 'users' | 'slots';
 
 const ALL_SLOTS = ['07:00','08:00','09:00','10:00','11:00','12:00','13:00','14:00','15:00','16:00','17:00','18:00','19:00','20:00','21:00'];
-
 const WEEKDAYS = [
-  { key: 'monday',    label: 'Segunda-feira',  short: 'Seg' },
-  { key: 'tuesday',   label: 'Terça-feira',    short: 'Ter' },
-  { key: 'wednesday', label: 'Quarta-feira',   short: 'Qua' },
-  { key: 'thursday',  label: 'Quinta-feira',   short: 'Qui' },
-  { key: 'friday',    label: 'Sexta-feira',    short: 'Sex' },
-  { key: 'saturday',  label: 'Sábado',         short: 'Sáb' },
-  { key: 'sunday',    label: 'Domingo',        short: 'Dom' },
+  { key: 'monday', label: 'Segunda-feira', short: 'Seg' },
+  { key: 'tuesday', label: 'Terça-feira', short: 'Ter' },
+  { key: 'wednesday', label: 'Quarta-feira', short: 'Qua' },
+  { key: 'thursday', label: 'Quinta-feira', short: 'Qui' },
+  { key: 'friday', label: 'Sexta-feira', short: 'Sex' },
+  { key: 'saturday', label: 'Sábado', short: 'Sáb' },
+  { key: 'sunday', label: 'Domingo', short: 'Dom' },
 ];
-
 const DEFAULT_SLOTS: Record<string, string> = {
-  monday:    '13:00,14:00,15:00,16:00,17:00,18:00,19:00',
-  tuesday:   '13:00,14:00,15:00,16:00,17:00,18:00,19:00',
+  monday: '13:00,14:00,15:00,16:00,17:00,18:00,19:00',
+  tuesday: '13:00,14:00,15:00,16:00,17:00,18:00,19:00',
   wednesday: '13:00,14:00,15:00,16:00,17:00,18:00,19:00',
-  thursday:  '13:00,14:00,15:00,16:00,17:00,18:00,19:00',
-  friday:    '13:00,14:00,15:00,16:00,17:00,18:00,19:00',
-  saturday:  '08:00,09:00,10:00,11:00',
-  sunday:    '',
+  thursday: '13:00,14:00,15:00,16:00,17:00,18:00,19:00',
+  friday: '13:00,14:00,15:00,16:00,17:00,18:00,19:00',
+  saturday: '08:00,09:00,10:00,11:00',
+  sunday: '',
 };
 
 export default function Admin() {
@@ -50,11 +49,9 @@ export default function Admin() {
     const [appts, usrs, cfg] = await Promise.all([getAppointments(), getAllUsers(), getSiteConfig()]);
     setAppointments(appts);
     setUsers(usrs);
-
     const loaded: Record<string, string[]> = {};
     WEEKDAYS.forEach(d => {
-      const key = `slots_${d.key}`;
-      const val = cfg[key] !== undefined ? cfg[key] : DEFAULT_SLOTS[d.key];
+      const val = cfg[`slots_${d.key}`] !== undefined ? cfg[`slots_${d.key}`] : DEFAULT_SLOTS[d.key];
       loaded[d.key] = val ? val.split(',').filter(Boolean) : [];
     });
     setSlotsByDay(loaded);
@@ -66,9 +63,7 @@ export default function Admin() {
   const toggleSlot = (day: string, slot: string) => {
     setSlotsByDay(prev => {
       const current = prev[day] || [];
-      const updated = current.includes(slot)
-        ? current.filter(s => s !== slot)
-        : [...current, slot].sort();
+      const updated = current.includes(slot) ? current.filter(s => s !== slot) : [...current, slot].sort();
       return { ...prev, [day]: updated };
     });
   };
@@ -76,17 +71,24 @@ export default function Admin() {
   const saveSlots = async () => {
     setSlotsSaving(true);
     const updates: Record<string, string> = {};
-    WEEKDAYS.forEach(d => {
-      updates[`slots_${d.key}`] = (slotsByDay[d.key] || []).join(',');
-    });
+    WEEKDAYS.forEach(d => { updates[`slots_${d.key}`] = (slotsByDay[d.key] || []).join(','); });
     await updateMultipleConfigs(updates);
     setSlotsSaving(false);
     setSlotsSaved(true);
     setTimeout(() => setSlotsSaved(false), 2500);
   };
 
-  const handleStatus = async (id: string, status: 'confirmed' | 'cancelled') => {
-    await updateAppointmentStatus(id, status);
+  const handleStatus = async (appt: Appointment, status: 'confirmed' | 'cancelled') => {
+    await updateAppointmentStatus(appt.id, status);
+    // Send email
+    try {
+      const formattedDate = format(parseISO(appt.date), "dd/MM/yyyy", { locale: ptBR });
+      if (status === 'confirmed') {
+        await sendConfirmationEmail(appt.userEmail, appt.studentName, formattedDate, appt.time, appt.address);
+      } else {
+        await sendCancellationEmail(appt.userEmail, appt.studentName, formattedDate, appt.time);
+      }
+    } catch {}
     loadData();
   };
 
@@ -101,7 +103,11 @@ export default function Admin() {
   });
 
   const stats = { total: appointments.length, pending: appointments.filter(a => a.status === 'pending').length, confirmed: appointments.filter(a => a.status === 'confirmed').length, cancelled: appointments.filter(a => a.status === 'cancelled').length };
-  const statusBadge: Record<string, { className: string; label: string }> = { pending: { className: 'badge-warning', label: '⏳ Pendente' }, confirmed: { className: 'badge-success', label: '✓ Confirmada' }, cancelled: { className: 'badge-danger', label: '✗ Cancelada' } };
+  const statusBadge: Record<string, { className: string; label: string }> = {
+    pending: { className: 'badge-warning', label: '⏳ Pendente' },
+    confirmed: { className: 'badge-success', label: '✓ Confirmada' },
+    cancelled: { className: 'badge-danger', label: '✗ Cancelada' },
+  };
   const roleLabel: Record<string, string> = { student: '🎓 Aluno', parent: '👨‍👩‍👦 Responsável' };
 
   if (pageLoading) return (
@@ -113,13 +119,15 @@ export default function Admin() {
   return (
     <div className="page-container grid-bg" style={{ paddingTop: '64px', paddingBottom: '3rem' }}>
       <div style={{ maxWidth: 1200, margin: '0 auto', padding: '1.5rem' }}>
-        <div className="animate-fade" style={{ marginBottom: '1.5rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.5rem' }}>
           <h1 style={{ fontSize: '1.8rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <span>⚡</span> Painel <span style={{ color: 'var(--warning)' }}>Administrativo</span>
           </h1>
+          <Link to="/dashboard">
+            <button className="btn-ghost" style={{ fontSize: '0.88rem', padding: '0.5rem 1rem' }}>📊 Dashboard</button>
+          </Link>
         </div>
 
-        {/* Stats */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1rem', marginBottom: '1.5rem' }}>
           {[{ label: 'Total', value: stats.total, color: 'var(--cyan)', icon: '📊' }, { label: 'Pendentes', value: stats.pending, color: 'var(--warning)', icon: '⏳' }, { label: 'Confirmadas', value: stats.confirmed, color: 'var(--success)', icon: '✓' }, { label: 'Canceladas', value: stats.cancelled, color: 'var(--danger)', icon: '✗' }].map(s => (
             <div key={s.label} className="card" style={{ padding: '1rem', textAlign: 'center' }}>
@@ -130,7 +138,6 @@ export default function Admin() {
           ))}
         </div>
 
-        {/* Tabs */}
         <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.25rem', borderBottom: '1px solid var(--border)', paddingBottom: '0.75rem', flexWrap: 'wrap' }}>
           {[{ key: 'appointments' as Tab, label: '📅 Agendamentos' }, { key: 'users' as Tab, label: '👥 Usuários' }, { key: 'slots' as Tab, label: '🕐 Horários' }].map(t => (
             <button key={t.key} onClick={() => setTab(t.key)} style={{ padding: '0.5rem 1.1rem', borderRadius: 'var(--radius-md)', background: tab === t.key ? 'var(--cyan-dim)' : 'transparent', border: tab === t.key ? '1px solid var(--border-strong)' : '1px solid transparent', color: tab === t.key ? 'var(--cyan-light)' : 'var(--text-muted)', cursor: 'pointer', fontSize: '0.88rem', fontWeight: tab === t.key ? 500 : 400, transition: 'var(--transition)' }}>
@@ -139,11 +146,10 @@ export default function Admin() {
           ))}
         </div>
 
-        {/* ── AGENDAMENTOS ── */}
         {tab === 'appointments' && (
           <div className="animate-fade">
             <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1.25rem', flexWrap: 'wrap', alignItems: 'center' }}>
-              <input className="input-field" placeholder="🔍 Buscar por aluno ou email..." value={search} onChange={e => setSearch(e.target.value)} style={{ maxWidth: 280, fontSize: '0.88rem' }} />
+              <input className="input-field" placeholder="🔍 Buscar..." value={search} onChange={e => setSearch(e.target.value)} style={{ maxWidth: 260, fontSize: '0.88rem' }} />
               <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
                 {['all','pending','confirmed','cancelled'].map(s => (
                   <button key={s} onClick={() => setFilterStatus(s)} style={{ padding: '0.35rem 0.8rem', borderRadius: 'var(--radius-md)', background: filterStatus === s ? 'var(--cyan-dim)' : 'var(--bg-card)', border: `1px solid ${filterStatus === s ? 'var(--border-strong)' : 'var(--border)'}`, color: filterStatus === s ? 'var(--cyan-light)' : 'var(--text-muted)', cursor: 'pointer', fontSize: '0.8rem', transition: 'var(--transition)' }}>
@@ -151,7 +157,7 @@ export default function Admin() {
                   </button>
                 ))}
               </div>
-              <button onClick={loadData} style={{ marginLeft: 'auto', padding: '0.35rem 0.8rem', borderRadius: 'var(--radius-md)', background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '0.8rem' }}>🔄 Atualizar</button>
+              <button onClick={loadData} style={{ marginLeft: 'auto', padding: '0.35rem 0.8rem', borderRadius: 'var(--radius-md)', background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '0.8rem' }}>🔄</button>
             </div>
             {filtered.length === 0
               ? <div style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-muted)' }}>Nenhum agendamento encontrado.</div>
@@ -174,11 +180,11 @@ export default function Admin() {
                         </div>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', alignItems: 'flex-end' }}>
                           {appt.status === 'pending' && <>
-                            <button onClick={() => handleStatus(appt.id, 'confirmed')} style={{ padding: '0.35rem 0.7rem', borderRadius: 'var(--radius-sm)', background: 'rgba(45,212,191,0.1)', border: '1px solid rgba(45,212,191,0.3)', color: 'var(--success)', fontSize: '0.78rem', cursor: 'pointer', whiteSpace: 'nowrap' }}>✓ Confirmar</button>
-                            <button onClick={() => handleStatus(appt.id, 'cancelled')} style={{ padding: '0.35rem 0.7rem', borderRadius: 'var(--radius-sm)', background: 'var(--danger-dim)', border: '1px solid rgba(248,113,113,0.2)', color: 'var(--danger)', fontSize: '0.78rem', cursor: 'pointer' }}>✗ Recusar</button>
+                            <button onClick={() => handleStatus(appt, 'confirmed')} style={{ padding: '0.35rem 0.7rem', borderRadius: 'var(--radius-sm)', background: 'rgba(45,212,191,0.1)', border: '1px solid rgba(45,212,191,0.3)', color: 'var(--success)', fontSize: '0.78rem', cursor: 'pointer', whiteSpace: 'nowrap' }}>✓ Confirmar</button>
+                            <button onClick={() => handleStatus(appt, 'cancelled')} style={{ padding: '0.35rem 0.7rem', borderRadius: 'var(--radius-sm)', background: 'var(--danger-dim)', border: '1px solid rgba(248,113,113,0.2)', color: 'var(--danger)', fontSize: '0.78rem', cursor: 'pointer' }}>✗ Recusar</button>
                           </>}
-                          {appt.status === 'confirmed' && <button onClick={() => handleStatus(appt.id, 'cancelled')} style={{ padding: '0.35rem 0.7rem', borderRadius: 'var(--radius-sm)', background: 'var(--danger-dim)', border: '1px solid rgba(248,113,113,0.2)', color: 'var(--danger)', fontSize: '0.78rem', cursor: 'pointer' }}>✗ Cancelar</button>}
-                          <button onClick={() => handleDelete(appt.id)} style={{ padding: '0.3rem 0.6rem', borderRadius: 'var(--radius-sm)', background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-dim)', fontSize: '0.72rem', cursor: 'pointer' }}>🗑 Remover</button>
+                          {appt.status === 'confirmed' && <button onClick={() => handleStatus(appt, 'cancelled')} style={{ padding: '0.35rem 0.7rem', borderRadius: 'var(--radius-sm)', background: 'var(--danger-dim)', border: '1px solid rgba(248,113,113,0.2)', color: 'var(--danger)', fontSize: '0.78rem', cursor: 'pointer' }}>✗ Cancelar</button>}
+                          <button onClick={() => handleDelete(appt.id)} style={{ padding: '0.3rem 0.6rem', borderRadius: 'var(--radius-sm)', background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-dim)', fontSize: '0.72rem', cursor: 'pointer' }}>🗑</button>
                         </div>
                       </div>
                     </div>
@@ -188,10 +194,9 @@ export default function Admin() {
           </div>
         )}
 
-        {/* ── USUÁRIOS ── */}
         {tab === 'users' && (
           <div className="animate-fade">
-            <div style={{ marginBottom: '1rem', color: 'var(--text-secondary)', fontSize: '0.88rem' }}>{users.length} usuário(s) cadastrado(s)</div>
+            <div style={{ marginBottom: '1rem', color: 'var(--text-secondary)', fontSize: '0.88rem' }}>{users.length} usuário(s)</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
               {users.map(u => {
                 const userAppts = appointments.filter(a => a.userId === u.id);
@@ -226,86 +231,41 @@ export default function Admin() {
           </div>
         )}
 
-        {/* ── HORÁRIOS POR DIA ── */}
         {tab === 'slots' && (
           <div className="animate-fade">
             <div className="card" style={{ padding: '1.75rem' }}>
               <h3 style={{ fontSize: '1.1rem', marginBottom: '0.4rem' }}>🕐 Horários por dia da semana</h3>
-              <p style={{ color: 'var(--text-secondary)', fontSize: '0.88rem', marginBottom: '1.5rem' }}>
-                Selecione os horários disponíveis para cada dia. Apenas os marcados aparecerão para os alunos.
-              </p>
-
-              {/* Day selector */}
+              <p style={{ color: 'var(--text-secondary)', fontSize: '0.88rem', marginBottom: '1.5rem' }}>Selecione os horários disponíveis para cada dia.</p>
               <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.5rem', flexWrap: 'wrap' }}>
                 {WEEKDAYS.map(d => {
                   const count = (slotsByDay[d.key] || []).length;
                   const isSelected = selectedDay === d.key;
                   return (
-                    <button key={d.key} onClick={() => setSelectedDay(d.key)} style={{
-                      padding: '0.5rem 0.9rem', borderRadius: 'var(--radius-md)',
-                      border: `2px solid ${isSelected ? 'var(--cyan)' : 'var(--border)'}`,
-                      background: isSelected ? 'var(--cyan-dim)' : 'var(--bg-input)',
-                      color: isSelected ? 'var(--cyan-light)' : 'var(--text-secondary)',
-                      cursor: 'pointer', fontSize: '0.85rem', fontWeight: isSelected ? 600 : 400,
-                      transition: 'var(--transition)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
-                    }}>
+                    <button key={d.key} onClick={() => setSelectedDay(d.key)} style={{ padding: '0.5rem 0.9rem', borderRadius: 'var(--radius-md)', border: `2px solid ${isSelected ? 'var(--cyan)' : 'var(--border)'}`, background: isSelected ? 'var(--cyan-dim)' : 'var(--bg-input)', color: isSelected ? 'var(--cyan-light)' : 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.85rem', fontWeight: isSelected ? 600 : 400, transition: 'var(--transition)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
                       <span>{d.short}</span>
-                      <span style={{ fontSize: '0.7rem', color: count > 0 ? 'var(--success)' : 'var(--text-dim)' }}>
-                        {count > 0 ? `${count} horários` : 'Indisponível'}
-                      </span>
+                      <span style={{ fontSize: '0.7rem', color: count > 0 ? 'var(--success)' : 'var(--text-dim)' }}>{count > 0 ? `${count}h` : 'Indispon.'}</span>
                     </button>
                   );
                 })}
               </div>
-
-              {/* Selected day label */}
               <div style={{ marginBottom: '1rem', fontSize: '0.95rem', fontWeight: 600, color: 'var(--cyan-light)' }}>
                 {WEEKDAYS.find(d => d.key === selectedDay)?.label}
-                {(slotsByDay[selectedDay] || []).length === 0 && (
-                  <span style={{ marginLeft: '0.75rem', fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 400 }}>
-                    — Nenhum horário selecionado (dia indisponível)
-                  </span>
-                )}
               </div>
-
-              {/* Slots grid */}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '0.6rem', marginBottom: '1.5rem' }}>
                 {ALL_SLOTS.map(slot => {
                   const active = (slotsByDay[selectedDay] || []).includes(slot);
                   return (
-                    <button key={slot} onClick={() => toggleSlot(selectedDay, slot)} style={{
-                      padding: '0.65rem 0.5rem', borderRadius: 'var(--radius-md)',
-                      border: `2px solid ${active ? 'var(--cyan)' : 'var(--border)'}`,
-                      background: active ? 'var(--cyan-dim)' : 'var(--bg-input)',
-                      color: active ? 'var(--cyan-light)' : 'var(--text-muted)',
-                      cursor: 'pointer', fontSize: '0.88rem', fontWeight: active ? 600 : 400,
-                      transition: 'var(--transition)', textAlign: 'center',
-                    }}>
+                    <button key={slot} onClick={() => toggleSlot(selectedDay, slot)} style={{ padding: '0.65rem 0.5rem', borderRadius: 'var(--radius-md)', border: `2px solid ${active ? 'var(--cyan)' : 'var(--border)'}`, background: active ? 'var(--cyan-dim)' : 'var(--bg-input)', color: active ? 'var(--cyan-light)' : 'var(--text-muted)', cursor: 'pointer', fontSize: '0.88rem', fontWeight: active ? 600 : 400, transition: 'var(--transition)', textAlign: 'center' }}>
                       {active ? '✓ ' : ''}{slot}
                     </button>
                   );
                 })}
               </div>
-
-              {/* Summary */}
-              <div style={{ background: 'var(--bg-input)', borderRadius: 'var(--radius-md)', padding: '1rem', marginBottom: '1.25rem', fontSize: '0.85rem' }}>
-                <div style={{ fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>Resumo da semana:</div>
-                {WEEKDAYS.map(d => (
-                  <div key={d.key} style={{ display: 'flex', gap: '0.75rem', marginBottom: '0.25rem', alignItems: 'center' }}>
-                    <span style={{ width: 32, color: 'var(--text-muted)', fontSize: '0.8rem' }}>{d.short}</span>
-                    {(slotsByDay[d.key] || []).length > 0
-                      ? <span style={{ color: 'var(--text-secondary)' }}>{(slotsByDay[d.key] || []).join(', ')}</span>
-                      : <span style={{ color: 'var(--text-dim)', fontStyle: 'italic' }}>Indisponível</span>
-                    }
-                  </div>
-                ))}
-              </div>
-
               <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
                 <button onClick={saveSlots} disabled={slotsSaving} className="btn-primary" style={{ padding: '0.75rem 1.75rem' }}>
-                  {slotsSaving ? <><span className="spinner" style={{ marginRight: 8 }} />Salvando...</> : 'Salvar todos os horários'}
+                  {slotsSaving ? <><span className="spinner" style={{ marginRight: 8 }} />Salvando...</> : 'Salvar horários'}
                 </button>
-                {slotsSaved && <span style={{ color: 'var(--success)', fontSize: '0.88rem', fontWeight: 600 }}>✓ Horários salvos!</span>}
+                {slotsSaved && <span style={{ color: 'var(--success)', fontSize: '0.88rem', fontWeight: 600 }}>✓ Salvo!</span>}
               </div>
             </div>
           </div>

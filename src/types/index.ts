@@ -61,3 +61,10 @@ export interface Message {
   read: boolean;
   createdAt: string;
 }
+
+export interface BlockedDate {
+  id: string;
+  date: string;
+  reason?: string;
+  createdAt: string;
+}
