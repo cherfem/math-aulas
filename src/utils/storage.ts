@@ -290,3 +290,8 @@ export async function getAvailableSlotsWithBlocked(date: string): Promise<string
   if (blocked) return [];
   return getAvailableSlotsByWeekday(date);
 }
+
+export async function getUserPhone(userId: string): Promise<string> {
+  const { data } = await supabase.from('users').select('phone').eq('id', userId).single();
+  return data?.phone || '';
+}
